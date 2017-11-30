@@ -55,7 +55,7 @@ if __name__ == '__main__':
 
     if show_example:
         print("Loading image for display.")
-        img = Image.open("../CAT2000_train/Stimuli/OutdoorNatural/031.jpg")
+        img = Image.open("./CAT2000_train/Stimuli/OutdoorNatural/031.jpg")
         img.thumbnail((512, 512))
         img = np.array(img)/255
 
