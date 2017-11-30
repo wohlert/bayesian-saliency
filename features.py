@@ -1,14 +1,15 @@
+import numpy as np
+from scipy.stats import gennorm
 from sklearn.feature_extraction.image import extract_patches_2d
 from sklearn.decomposition import FastICA
 
 
-def compute_components(images, size=11):
+def compute_components(patches):
     """
     Computes the ICA components based on the input images
     by extracting `size x size x channels` image patches.
 
-    :param images: (np.array) 4-dimensional array of natural images
-    :param size (optional): (int) component height and width
+    :param patches: (np.array) 2-dimensional array of extracted patches
     :return (np.array) ICA components
     -------------
     References:
@@ -16,14 +17,10 @@ def compute_components(images, size=11):
     "Fast and Robust Fixed-Point Algorithms for Independent Component Analysis"
     (Hyvärinen 1999).
     """
-    n, h, w, channels = images.shape
-
-    patches = extract_patches_2d(np.vstack(images), (size, size), max_patches=50000)
-
     ica = FastICA()
-    ica.fit(patches.reshape(-1, size*size*channels))
+    ica.fit(patches)
 
-    components = (ica.components_ + ica.mean_).reshape(-1, size, size, channels)
+    components = (ica.components_ + ica.mean_)
     return components
 
 
@@ -46,7 +43,7 @@ def extract_patches(image, size=11):
     for i in range(n*m):
         col = i  % m
         row = i // m
-        patches[:, i] = np.reshape(img[row:row+size, col:col+size, :], dimensions, "F")
+        patches[:, i] = np.reshape(image[row:row+size, col:col+size, :], dimensions, "F")
 
     return patches
 
@@ -104,6 +101,8 @@ def compute_saliency(image, filters, sigma=None, theta=None):
         theta = np.ones((n_filters))
 
     activation, dimensions = compute_response(image, filters)
+
+    # Σ|f∗x/α|^β
     saliency_map = sum([(np.abs(activation[i].T)/sigma[i])**theta[i] for i in range(n_filters)])
 
     # Output 2d grayscale saliency map
@@ -119,11 +118,6 @@ def fit_gaussian(images, filters):
     :param filters (np.array): ICA filters
     :return sigmas: shapes of fitted Gaussian
     :return thetas: scales of fitted Gaussian
-    -------------
-    References:
-
-    "A globally convergent and consistent method for estimating the shape
-    parameter of a generalized Gaussian distribution" (Song 2006).
     """
     from scipy.stats import gennorm
 
@@ -134,6 +128,6 @@ def fit_gaussian(images, filters):
     # Fit a Generalized Gaussian to the data while
     # keeping the mean fixed.
     # Fit distribution to each filter.
-    (thetas, _, sigmas) = zip(*[gennorm.fit(filt, floc=0) for filt in responses)
+    (thetas, _, sigmas) = zip(*[gennorm.fit(filt, floc=0) for filt in responses])
 
     return sigmas, thetas
