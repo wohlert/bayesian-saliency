@@ -1,14 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
-from scipy.stats import gennorm
+from scipy.stats import gennorm, norm, multivariate_normal
 from features import extract_patches, compute_components, compute_saliency, compute_response
 from PIL import Image
 from multiprocessing import Pool, cpu_count
 from functools import partial
+import argparse
+plt.rcParams["image.cmap"] = "binary_r"
 
 
-show_example = True
+H, W = 228, 512
+
+parser = argparse.ArgumentParser()
+parser.add_argument("image_id")
+args = parser.parse_args()
+image_id = int(args.image_id)
+
 
 if __name__ == '__main__':
 
@@ -29,6 +37,14 @@ if __name__ == '__main__':
         image.thumbnail((320, 320))
         image = np.array(image)/255
         return image
+
+    def load_fixation(i):
+        ratio = (1980/512)
+
+        fixations = loadmat("./CAT2000_train/FIXATIONLOCS/OutdoorNatural/{0:03d}.mat".format(i))["fixLocs"]
+        y, x = np.where(fixations == 1)
+        x, y = x//ratio, y//ratio
+        return x, y
 
     try:
         filters = np.load("filters.npy")
@@ -53,15 +69,29 @@ if __name__ == '__main__':
         filters = ica_components - np.mean(ica_components, 0)
         np.save("filters", filters)
 
-    if show_example:
-        print("Loading image for display.")
-        img = Image.open("./CAT2000_train/Stimuli/OutdoorNatural/031.jpg")
-        img.thumbnail((512, 512))
-        img = np.array(img)/255
+    print("Loading image for display.")
+    img = Image.open("./CAT2000_train/Stimuli/OutdoorNatural/{0:03d}.jpg".format(image_id))
+    fmap = Image.open("./CAT2000_train/FIXATIONMAPS/OutdoorNatural/{0:03d}.jpg".format(image_id))
+    x, y = load_fixation(31)
 
-        print("Computing responses and saving file `response.png`.")
-        saliency_sun = compute_saliency(img, filters)
-        plt.imsave("response.png", saliency_sun)
+    # Half image size
+    img.thumbnail((512, 512))
+    img = np.array(img)/255
+
+    fmap.thumbnail((512, 512))
+    fmap = np.array(fmap)/255
+
+    print("Computing responses and saving file `response.png`.")
+    saliency = compute_saliency(img, filters)
+
+    f, axarr = plt.subplots(2, 2, figsize=(10, 10))
+    axarr[0, 0].imshow(img)
+    axarr[0, 1].imshow(saliency)
+    axarr[1, 0].imshow(fmap)
+    axarr[1, 1].imshow(img)
+    axarr[1, 1].scatter(x, y, s=1, c="r")
+
+    plt.imsave("response.png", saliency)
 
     try:
         theta = np.load("theta.npy")
@@ -89,7 +119,74 @@ if __name__ == '__main__':
         np.save("theta", theta)
         np.save("sigma", sigma)
 
-    if show_example:
-        print("Computing weighted responses and saving file `response-weighted.png`.")
-        saliency_sun = compute_saliency(img, filters, sigma=sigma, theta=theta)
-        plt.imsave("response-weighted.png", saliency_sun)
+    print("Computing weighted responses and saving file `response-weighted.png`.")
+    saliency = compute_saliency(img, filters, sigma=sigma, theta=theta)
+
+    mat = loadmat("./stats.mat")
+
+    k_filters = mat["B1"]
+    k_sigma = mat["sigmas"].reshape(-1)
+    k_theta = mat["thetas"].reshape(-1)
+
+    saliency_kanan = compute_saliency(img, k_filters, sigma=k_sigma, theta=k_theta)
+    plt.imsave("response-weighted.png", saliency)
+
+    try:
+        prior = np.load("prior.npy")
+    except:
+        print("3.1: Estimate variance for prior.")
+        x, y = zip(*[load_fixation(2*i+1) for i in range(100)])
+        x, y = np.hstack(x), np.hstack(y)
+
+        # Estimate the variance over each dimension
+        # individually by fitting a normal distribution.
+        (_, var_x) = norm.fit(x, floc=W//2)
+        (_, var_y) = norm.fit(y, floc=H//2)
+
+        var = max(var_x, var_y)
+
+        h, w = saliency.shape
+        x, y = np.mgrid[0:h:1, 0:w:1]
+        grid = np.empty(x.shape + (2,))
+        grid[:, :, 0], grid[:, :, 1] = x, y
+
+        gaussian = multivariate_normal(mean=(h//2, w//2), cov=var*np.eye(2))
+        prior = np.log(gaussian.pdf(grid) + 1e-8)
+        np.save("prior", prior)
+
+    # Calculate ratio between self-information and prior
+    ratio = -(saliency.max() / prior.max())/2
+
+    print("Plotting maps and saving as `comparison.pdf`")
+    f, ((ax0, ax1, ax2), (ax3, ax4, ax5)) = plt.subplots(2, 3, figsize=(12, 6))
+
+    x, y = load_fixation(image_id)
+
+    ax0.imshow(img)
+    ax0.scatter(x, y, s=2, c="r")
+    ax0.set_title("Input image")
+    ax0.axis("off")
+
+    ax1.imshow(fmap)
+    ax1.set_title("Attention map")
+    ax1.axis("off")
+
+    ax2.imshow(saliency_kanan)
+    ax2.set_title("Kanan, Cottrell (2010)")
+    ax2.axis("off")
+
+    ax3.imshow(saliency)
+    ax3.set_title("Ours")
+    ax3.axis("off")
+
+    ax4.imshow(prior)
+    ax4.set_title("Prior")
+    ax4.axis("off")
+
+    ax5.imshow(saliency + ratio*prior)
+    ax5.set_title("Ours with prior")
+    ax5.axis("off")
+
+    plt.tight_layout()
+
+    plt.savefig("comparison.pdf")

@@ -10,8 +10,9 @@ The `main.py` file will compute the ICA components and the parameters of
 the distributions. Make sure that `eizaburo-doi-kyoto_natim-c2015ff` is
 located in the same directory along with `CAT2000_train`.
 
-Then run.
+Then run the main file with the id of the file you want to estimate
+saliency for. For example:
 
 ```
-python main.py
+python main.py 11
 ```
