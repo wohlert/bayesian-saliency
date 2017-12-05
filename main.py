@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
 from scipy.stats import gennorm, norm, multivariate_normal
+from scipy.integrate import simps
 from features import extract_patches, compute_components, compute_saliency, compute_response
 from PIL import Image
 from multiprocessing import Pool, cpu_count
@@ -14,12 +15,14 @@ H, W = 228, 512
 
 parser = argparse.ArgumentParser()
 parser.add_argument("image_id")
+parser.add_argument("prior")
+
 args = parser.parse_args()
 image_id = int(args.image_id)
+include_prior = True if args.prior is "True" else False
 
 
 if __name__ == '__main__':
-
     tokyo_path = "./eizaburo-doi-kyoto_natim-c2015ff"
     base_path = "{}/osLMS0103-{}.mat"
 
@@ -38,10 +41,14 @@ if __name__ == '__main__':
         image = np.array(image)/255
         return image
 
-    def load_fixation(i):
+    def load_fixation(image_id):
+        """
+        Load the fixation map for a given image and return
+        the downscaled points of fixation
+        """
         ratio = (1980/512)
 
-        fixations = loadmat("./CAT2000_train/FIXATIONLOCS/OutdoorNatural/{0:03d}.mat".format(i))["fixLocs"]
+        fixations = loadmat("./CAT2000_train/FIXATIONLOCS/OutdoorNatural/{0:03d}.mat".format(image_id))["fixLocs"]
         y, x = np.where(fixations == 1)
         x, y = x//ratio, y//ratio
         return x, y
@@ -108,7 +115,7 @@ if __name__ == '__main__':
         # Use multiprocessing to speed up computation
         # as each filter is independent.
         print("2.3: Estimating parameters (this might take a while).")
-        pool = Pool(cpu_count())
+        pool = Pool(cpu_count()*2)
         model_fitting = partial(gennorm.fit, floc=0)
         filter_parameters = pool.map(model_fitting, total_response)
 
@@ -190,3 +197,49 @@ if __name__ == '__main__':
     plt.tight_layout()
 
     plt.savefig("comparison.pdf")
+
+    def roc_auc(id, n_points=20, include_prior=True):
+        """
+        Calculates the Reciever-Operating-Characteristic (ROC) area under
+        the curve (AUC) by numerical integration.
+        """
+        target = Image.open("./CAT2000_train/FIXATIONMAPS/OutdoorNatural/{0:03d}.jpg".format(id))
+        target.thumbnail((512, 512))
+        target = np.array(target)/255
+        target = target[5:-5, 5:-5]
+
+        img = Image.open("./CAT2000_train/Stimuli/OutdoorNatural/{0:03d}.jpg".format(id))
+        img.thumbnail((512, 512))
+        img = np.array(img)/255
+
+        saliency = compute_saliency(img, filters, sigma=sigma, theta=theta)
+
+        if include_prior:
+            ratio = -(saliency.max() / prior.max())/2
+            generated = saliency + ratio*prior
+        else:
+            generated = saliency
+
+        # min max normalisation
+        generated = (generated - generated.min())/(generated.max() - generated.min())
+
+        def roc(p=0.1):
+            x = generated.reshape(-1) > p
+            t = target.reshape(-1) > p
+
+            return np.sum(x==t)/len(t)
+
+        calculate_roc = np.vectorize(roc)
+
+        x = np.linspace(0, 1, n_points)
+        auc = simps(calculate_roc(x))/n_points
+
+        return auc
+
+    print("4.1: Calculating ROC AUCs (this might take a while).")
+    pool = Pool(cpu_count()*2)
+    auc_score = partial(roc_auc, include_prior=include_prior)
+    aucs = pool.map(auc_score, [2*i+1 for i in range(100)])
+
+    #np.save("auc-prior-{}".format(include_prior), aucs)
+    np.save("auc-prior-{}".format(include_prior), aucs)
